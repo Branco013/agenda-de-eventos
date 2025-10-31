@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import DashboardLayout from "./components/DashboardLayout";
+import AuthPage from "./pages/Auth";
 import Eventos from "./pages/Eventos";
 import Clientes from "./pages/Clientes";
 import Menus from "./pages/Menus";
@@ -21,6 +22,7 @@ function Router() {
         <Route path="/relatorios" component={Relatorios} />
         <Route path="/configuracoes" component={Configuracoes} />
         <Route path="/404" component={NotFound} />
+        <Route path="/auth" component={AuthPage} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

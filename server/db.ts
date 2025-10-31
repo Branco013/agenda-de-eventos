@@ -76,6 +76,44 @@ const COLLECTIONS = {
 // ============= USERS =============
 
 /**
+ * Cria um novo usuário (para autenticação local).
+ */
+export async function createUser(user: User): Promise<void> {
+  const db = getDb();
+  const userData: Omit<User, "id"> = {
+    ...user,
+    createdAt: admin.firestore.FieldValue.serverTimestamp() as any,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp() as any,
+  };
+  await db.collection(COLLECTIONS.USERS).doc(user.id).set(userData);
+}
+
+/**
+ * Obtém um usuário pelo nome de usuário (para autenticação local).
+ */
+export async function getUserByUsername(username: string): Promise<User | undefined> {
+  const db = getDb();
+  const snapshot = await db.collection(COLLECTIONS.USERS)
+    .where("username", "==", username)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    return undefined;
+  }
+
+  const userDoc = snapshot.docs[0];
+  const data = userDoc.data() as User;
+  return {
+    ...data,
+    id: userDoc.id,
+    createdAt: data.createdAt ? (data.createdAt as any).toDate() : new Date(),
+    updatedAt: data.updatedAt ? (data.updatedAt as any).toDate() : new Date(),
+    lastSignedIn: data.lastSignedIn ? (data.lastSignedIn as any).toDate() : new Date(),
+  };
+}
+
+/**
  * Cria ou atualiza um usuário.
  * No Firestore, vamos usar o openId como ID do documento.
  */
@@ -106,14 +144,36 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     await userRef.set(updateSet, { merge: true });
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
-    throw error;
+    throw error;  };
+}
+
+/**
+ * Obtém um usuário pelo ID do documento.
+ */
+export async function getUserById(id: string): Promise<User | undefined> {
+  const db = getDb();
+  const userDoc = await db.collection(COLLECTIONS.USERS).doc(id).get();
+
+  if (!userDoc.exists) {
+    return undefined;
   }
+
+  const data = userDoc.data() as User;
+  return {
+    ...data,
+    id: userDoc.id,
+    createdAt: data.createdAt ? (data.createdAt as any).toDate() : new Date(),
+    updatedAt: data.updatedAt ? (data.updatedAt as any).toDate() : new Date(),
+    lastSignedIn: data.lastSignedIn ? (data.lastSignedIn as any).toDate() : new Date(),
+  };
 }
 
 /**
  * Obtém um usuário pelo openId.
  */
 export async function getUserByOpenId(openId: string): Promise<User | undefined> {
+  // Esta função é mantida para compatibilidade com o fluxo OAuth, mas será removida em breve.
+
   const db = getDb();
   const userDoc = await db.collection(COLLECTIONS.USERS).doc(openId).get();
 
