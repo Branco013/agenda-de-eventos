@@ -1,0 +1,472 @@
+import { useState, useEffect } from "react";
+import { trpc } from "@/lib/trpc";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { toast } from "sonner";
+import {
+  reaisParaCentavos,
+  centavosParaReais,
+  formatarMoeda,
+  LOCAIS_EVENTO,
+} from "@shared/constants";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+
+interface EventoDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  eventoId?: number;
+}
+
+export function EventoDialog({ open, onOpenChange, eventoId }: EventoDialogProps) {
+  const utils = trpc.useUtils();
+  const isEdit = !!eventoId;
+
+  const [formData, setFormData] = useState({
+    clienteId: "",
+    menuId: "",
+    tipoEvento: "",
+    data: "",
+    horario: "",
+    local: "salao_eventos" as keyof typeof LOCAIS_EVENTO,
+    quantidadePessoas: "",
+    valorPorPessoa: "",
+    pacoteBebidasAtivo: false,
+    valorPacoteBebidas: "",
+    observacoes: "",
+    lembreteAtivo: true,
+  });
+
+  const { data: clientes } = trpc.clientes.listar.useQuery();
+  const { data: menus } = trpc.menus.listar.useQuery({ apenasAtivos: true });
+  const { data: evento } = trpc.eventos.obter.useQuery(
+    { id: eventoId! },
+    { enabled: isEdit }
+  );
+
+  // Preencher formulário quando carregar dados do evento
+  useEffect(() => {
+    if (evento) {
+      setFormData({
+        clienteId: evento.clienteId.toString(),
+        menuId: evento.menuId.toString(),
+        tipoEvento: evento.tipoEvento,
+        data: format(new Date(evento.data), "yyyy-MM-dd"),
+        horario: evento.horario,
+        local: evento.local as keyof typeof LOCAIS_EVENTO,
+        quantidadePessoas: evento.quantidadePessoas.toString(),
+        valorPorPessoa: centavosParaReais(evento.valorPorPessoaEvento).toFixed(2),
+        pacoteBebidasAtivo: evento.pacoteBebidasAtivo,
+        valorPacoteBebidas: evento.valorPacoteBebidas
+          ? centavosParaReais(evento.valorPacoteBebidas).toFixed(2)
+          : "",
+        observacoes: evento.observacoes || "",
+        lembreteAtivo: evento.lembreteAtivo,
+      });
+    }
+  }, [evento]);
+
+  // Atualizar valor por pessoa quando selecionar menu
+  useEffect(() => {
+    if (formData.menuId && menus) {
+      const menu = menus.find((m) => m.id === parseInt(formData.menuId));
+      if (menu) {
+        setFormData((prev) => ({
+          ...prev,
+          valorPorPessoa: centavosParaReais(menu.valorPadraoPorPessoa).toFixed(2),
+        }));
+      }
+    }
+  }, [formData.menuId, menus]);
+
+  const criarMutation = trpc.eventos.criar.useMutation({
+    onSuccess: () => {
+      toast.success("Evento criado com sucesso!");
+      utils.eventos.listar.invalidate();
+      onOpenChange(false);
+      resetForm();
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const atualizarMutation = trpc.eventos.atualizar.useMutation({
+    onSuccess: () => {
+      toast.success("Evento atualizado com sucesso!");
+      utils.eventos.listar.invalidate();
+      onOpenChange(false);
+      resetForm();
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const resetForm = () => {
+    setFormData({
+      clienteId: "",
+      menuId: "",
+      tipoEvento: "",
+      data: "",
+      horario: "",
+      local: "salao_eventos",
+      quantidadePessoas: "",
+      valorPorPessoa: "",
+      pacoteBebidasAtivo: false,
+      valorPacoteBebidas: "",
+      observacoes: "",
+      lembreteAtivo: true,
+    });
+  };
+
+  // Calcular valores
+  const calcularValores = () => {
+    const qtd = parseInt(formData.quantidadePessoas) || 0;
+    const valorPorPessoa = parseFloat(formData.valorPorPessoa) || 0;
+    const valorBebidas = parseFloat(formData.valorPacoteBebidas) || 0;
+
+    const subtotalMenu = qtd * valorPorPessoa;
+    const subtotalBebidas = formData.pacoteBebidasAtivo ? qtd * valorBebidas : 0;
+    const total = subtotalMenu + subtotalBebidas;
+
+    return {
+      subtotalMenu,
+      subtotalBebidas,
+      total,
+    };
+  };
+
+  const valores = calcularValores();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!formData.clienteId) {
+      toast.error("Selecione um cliente");
+      return;
+    }
+
+    if (!formData.menuId) {
+      toast.error("Selecione um menu");
+      return;
+    }
+
+    if (!formData.tipoEvento.trim()) {
+      toast.error("Tipo de evento é obrigatório");
+      return;
+    }
+
+    if (!formData.data) {
+      toast.error("Data é obrigatória");
+      return;
+    }
+
+    if (!formData.horario) {
+      toast.error("Horário é obrigatório");
+      return;
+    }
+
+    const qtd = parseInt(formData.quantidadePessoas);
+    if (isNaN(qtd) || qtd <= 0) {
+      toast.error("Quantidade de pessoas deve ser maior que zero");
+      return;
+    }
+
+    const valorPorPessoa = parseFloat(formData.valorPorPessoa);
+    if (isNaN(valorPorPessoa) || valorPorPessoa <= 0) {
+      toast.error("Valor por pessoa deve ser maior que zero");
+      return;
+    }
+
+    let valorBebidas = 0;
+    if (formData.pacoteBebidasAtivo) {
+      valorBebidas = parseFloat(formData.valorPacoteBebidas);
+      if (isNaN(valorBebidas) || valorBebidas <= 0) {
+        toast.error("Valor do pacote de bebidas deve ser maior que zero");
+        return;
+      }
+    }
+
+    const eventoData = {
+      clienteId: parseInt(formData.clienteId),
+      menuId: parseInt(formData.menuId),
+      tipoEvento: formData.tipoEvento,
+      data: formData.data,
+      horario: formData.horario,
+      local: formData.local,
+      quantidadePessoas: qtd,
+      valorPorPessoaEvento: reaisParaCentavos(valorPorPessoa),
+      pacoteBebidasAtivo: formData.pacoteBebidasAtivo,
+      valorPacoteBebidas: formData.pacoteBebidasAtivo
+        ? reaisParaCentavos(valorBebidas)
+        : undefined,
+      observacoes: formData.observacoes || undefined,
+      lembreteAtivo: formData.lembreteAtivo,
+    };
+
+    if (isEdit) {
+      atualizarMutation.mutate({
+        id: eventoId,
+        ...eventoData,
+      });
+    } else {
+      criarMutation.mutate(eventoData);
+    }
+  };
+
+  const isLoading = criarMutation.isPending || atualizarMutation.isPending;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+        <form onSubmit={handleSubmit}>
+          <DialogHeader>
+            <DialogTitle>{isEdit ? "Editar Evento" : "Novo Evento"}</DialogTitle>
+            <DialogDescription>
+              {isEdit
+                ? "Atualize as informações do evento"
+                : "Preencha os dados do novo evento"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="cliente">
+                Cliente <span className="text-destructive">*</span>
+              </Label>
+              <Select value={formData.clienteId} onValueChange={(value) => setFormData({ ...formData, clienteId: value })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um cliente" />
+                </SelectTrigger>
+                <SelectContent>
+                  {clientes?.map((cliente) => (
+                    <SelectItem key={cliente.id} value={cliente.id.toString()}>
+                      {cliente.nomeCompleto}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="menu">
+                Menu <span className="text-destructive">*</span>
+              </Label>
+              <Select value={formData.menuId} onValueChange={(value) => setFormData({ ...formData, menuId: value })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um menu" />
+                </SelectTrigger>
+                <SelectContent>
+                  {menus?.map((menu) => (
+                    <SelectItem key={menu.id} value={menu.id.toString()}>
+                      {menu.nome} - {formatarMoeda(menu.valorPadraoPorPessoa)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="tipoEvento">
+                Tipo de Evento <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="tipoEvento"
+                value={formData.tipoEvento}
+                onChange={(e) => setFormData({ ...formData, tipoEvento: e.target.value })}
+                placeholder="Jantar Corporativo, Casamento, etc."
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="data">
+                  Data <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="data"
+                  type="date"
+                  value={formData.data}
+                  onChange={(e) => setFormData({ ...formData, data: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="horario">
+                  Horário <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="horario"
+                  type="time"
+                  value={formData.horario}
+                  onChange={(e) => setFormData({ ...formData, horario: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="local">
+                Local <span className="text-destructive">*</span>
+              </Label>
+              <Select value={formData.local} onValueChange={(value: any) => setFormData({ ...formData, local: value })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(LOCAIS_EVENTO).map(([key, label]) => (
+                    <SelectItem key={key} value={key}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="quantidadePessoas">
+                  Quantidade de Pessoas <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="quantidadePessoas"
+                  type="number"
+                  min="1"
+                  value={formData.quantidadePessoas}
+                  onChange={(e) =>
+                    setFormData({ ...formData, quantidadePessoas: e.target.value })
+                  }
+                  placeholder="50"
+                  required
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="valorPorPessoa">
+                  Valor por Pessoa (R$) <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="valorPorPessoa"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.valorPorPessoa}
+                  onChange={(e) =>
+                    setFormData({ ...formData, valorPorPessoa: e.target.value })
+                  }
+                  placeholder="85.00"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="border-t pt-4">
+              <div className="flex items-center space-x-2 mb-3">
+                <Switch
+                  id="pacoteBebidas"
+                  checked={formData.pacoteBebidasAtivo}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, pacoteBebidasAtivo: checked })
+                  }
+                />
+                <Label htmlFor="pacoteBebidas">Incluir Pacote de Bebidas</Label>
+              </div>
+
+              {formData.pacoteBebidasAtivo && (
+                <div className="grid gap-2 ml-6">
+                  <Label htmlFor="valorPacoteBebidas">
+                    Valor do Pacote por Pessoa (R$) <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="valorPacoteBebidas"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.valorPacoteBebidas}
+                    onChange={(e) =>
+                      setFormData({ ...formData, valorPacoteBebidas: e.target.value })
+                    }
+                    placeholder="50.00"
+                    required={formData.pacoteBebidasAtivo}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="border-t pt-4 bg-muted/50 p-4 rounded-lg">
+              <h4 className="font-semibold mb-3">Resumo de Valores</h4>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span>Subtotal Menu:</span>
+                  <span className="font-medium">{formatarMoeda(reaisParaCentavos(valores.subtotalMenu))}</span>
+                </div>
+                {formData.pacoteBebidasAtivo && (
+                  <div className="flex justify-between">
+                    <span>Subtotal Bebidas:</span>
+                    <span className="font-medium">{formatarMoeda(reaisParaCentavos(valores.subtotalBebidas))}</span>
+                  </div>
+                )}
+                <div className="flex justify-between border-t pt-2 text-base font-bold">
+                  <span>Total:</span>
+                  <span className="text-primary">{formatarMoeda(reaisParaCentavos(valores.total))}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="observacoes">Observações</Label>
+              <Textarea
+                id="observacoes"
+                value={formData.observacoes}
+                onChange={(e) => setFormData({ ...formData, observacoes: e.target.value })}
+                placeholder="Observações sobre o evento"
+                rows={3}
+              />
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="lembrete"
+                checked={formData.lembreteAtivo}
+                onCheckedChange={(checked) =>
+                  setFormData({ ...formData, lembreteAtivo: checked })
+                }
+              />
+              <Label htmlFor="lembrete">Enviar lembrete automático D-7</Label>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isLoading}
+            >
+              Cancelar
+            </Button>
+            <Button type="submit" disabled={isLoading}>
+              {isLoading ? "Salvando..." : isEdit ? "Atualizar" : "Criar"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

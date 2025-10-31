@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1761444044365,
+      "tag": "0000_amused_luminals",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1761444124742,
+      "tag": "0001_charming_dark_beast",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1761448946261,
+      "tag": "0002_bouncy_moon_knight",
+      "breakpoints": true
+    }
+  ]
+}
