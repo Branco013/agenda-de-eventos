@@ -7,6 +7,7 @@ import * as db from "./db";
 import { gerarPropostaPDF } from "./pdfGenerator";
 import { enviarPropostaEmail, enviarAtualizacaoEmail, enviarLembreteEmail } from "./emailService";
 import { enviarAgendaDiaria } from "./agendaDiariaService";
+import { StatusEvento } from "@shared/types";
 
 export const appRouter = router({
   system: systemRouter,
@@ -30,7 +31,7 @@ export const appRouter = router({
       }),
 
     obter: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string() }))
       .query(async ({ input }) => {
         return await db.obterClientePorId(input.id);
       }),
@@ -52,7 +53,7 @@ export const appRouter = router({
     atualizar: protectedProcedure
       .input(
         z.object({
-          id: z.number(),
+          id: z.string(),
           nomeCompleto: z.string().min(1, "Nome completo é obrigatório").optional(),
           telefone: z.string().min(1, "Telefone é obrigatório").optional(),
           email: z.string().email("E-mail inválido").optional().nullable(),
@@ -66,7 +67,7 @@ export const appRouter = router({
       }),
 
     excluir: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string() }))
       .mutation(async ({ input }) => {
         await db.excluirCliente(input.id);
         return { success: true };
@@ -81,7 +82,7 @@ export const appRouter = router({
       }),
 
     obter: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string() }))
       .query(async ({ input }) => {
         return await db.obterMenuPorId(input.id);
       }),
@@ -102,7 +103,7 @@ export const appRouter = router({
     atualizar: protectedProcedure
       .input(
         z.object({
-          id: z.number(),
+          id: z.string(),
           nome: z.string().min(1, "Nome é obrigatório").optional(),
           valorPadraoPorPessoa: z.number().min(0, "Valor deve ser positivo").optional(),
           descricao: z.string().optional().nullable(),
@@ -115,7 +116,7 @@ export const appRouter = router({
       }),
 
     excluir: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string() }))
       .mutation(async ({ input }) => {
         await db.excluirMenu(input.id);
         return { success: true };
@@ -130,35 +131,40 @@ export const appRouter = router({
           dataFim: z.string().optional(),
           status: z.string().optional(),
           local: z.string().optional(),
-          clienteId: z.number().optional(),
+          clienteId: z.string().optional(),
         }).optional()
       )
       .query(async ({ input }) => {
         const filtros: any = {};
         if (input?.dataInicio) filtros.dataInicio = new Date(input.dataInicio);
         if (input?.dataFim) filtros.dataFim = new Date(input.dataFim);
-        if (input?.status) filtros.status = input.status;
+        if (input?.status) filtros.status = input.status as StatusEvento;
         if (input?.local) filtros.local = input.local;
         if (input?.clienteId) filtros.clienteId = input.clienteId;
         return await db.listarEventos(filtros);
       }),
 
     obter: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string() }))
       .query(async ({ input }) => {
         return await db.obterEventoPorId(input.id);
       }),
 
     obterComDetalhes: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string() }))
       .query(async ({ input }) => {
         const evento = await db.obterEventoPorId(input.id);
         if (!evento) return null;
 
         const cliente = await db.obterClientePorId(evento.clienteId);
+        if (!cliente) throw new Error("Cliente não encontrado para o evento.");
+
         const menu = await db.obterMenuPorId(evento.menuId);
+        if (!menu) throw new Error("Menu não encontrado para o evento.");
+
         const pratosSnapshot = await db.obterSnapshotPratos(evento.id);
         const historicoEmails = await db.obterHistoricoEmailsPorEvento(evento.id);
+        const vinhos = await db.obterVinhosEvento(evento.id);
 
         return {
           evento,
@@ -166,19 +172,20 @@ export const appRouter = router({
           menu,
           pratosSnapshot,
           historicoEmails,
+          vinhos,
         };
       }),
 
     criar: protectedProcedure
       .input(
         z.object({
-          clienteId: z.number(),
+          clienteId: z.string(),
           tipoEvento: z.string().min(1, "Tipo do evento é obrigatório"),
           local: z.enum(["salao_eventos", "salao_principal"]),
           quantidadePessoas: z.number().min(1, "Quantidade deve ser maior que zero"),
           data: z.string(),
           horario: z.string().regex(/^\d{2}:\d{2}$/, "Horário deve estar no formato HH:MM"),
-          menuId: z.number(),
+          menuId: z.string(),
           status: z.enum(["em_analise", "confirmado", "cancelado"]).default("em_analise"),
           valorPorPessoaEvento: z.number().min(0),
           pacoteBebidasAtivo: z.boolean().default(false),
@@ -193,7 +200,6 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input }) => {
-        // Verifica conflito de agenda
         const dataEvento = new Date(input.data);
         const conflito = await db.verificarConflitoAgenda(
           dataEvento,
@@ -211,17 +217,15 @@ export const appRouter = router({
           );
         }
 
-        // Calcula os valores
         const subtotalMenu = input.valorPorPessoaEvento * input.quantidadePessoas;
         const subtotalBebidas = input.pacoteBebidasAtivo
           ? input.valorPacoteBebidas * input.quantidadePessoas
           : 0;
         const subtotalVinhos = await db.calcularSubtotalVinhos(input.vinhos || []);
         const subtotalSemTaxa = subtotalMenu + subtotalBebidas + subtotalVinhos;
-        const taxaServico = Math.round(subtotalSemTaxa * 0.10); // 10%
+        const taxaServico = Math.round(subtotalSemTaxa * 0.10);
         const totalEvento = subtotalSemTaxa + taxaServico;
 
-        // Cria o evento
         const { vinhos, ...eventoData } = input;
         const evento = await db.criarEvento({
           ...eventoData,
@@ -233,12 +237,10 @@ export const appRouter = router({
           totalEvento,
         });
 
-        // Adiciona os vinhos
         if (vinhos && vinhos.length > 0) {
           await db.adicionarVinhosEvento(evento.id, vinhos);
         }
 
-        // Cria o snapshot dos pratos do menu
         await db.criarSnapshotPratos(evento.id, input.menuId);
 
         return evento;
@@ -247,14 +249,14 @@ export const appRouter = router({
     atualizar: protectedProcedure
       .input(
         z.object({
-          id: z.number(),
-          clienteId: z.number().optional(),
+          id: z.string(),
+          clienteId: z.string().optional(),
           tipoEvento: z.string().min(1).optional(),
           local: z.enum(["salao_eventos", "salao_principal"]).optional(),
           quantidadePessoas: z.number().min(1).optional(),
           data: z.string().optional(),
           horario: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-          menuId: z.number().optional(),
+          menuId: z.string().optional(),
           status: z.enum(["em_analise", "confirmado", "cancelado"]).optional(),
           valorPorPessoaEvento: z.number().min(0).optional(),
           pacoteBebidasAtivo: z.boolean().optional(),
@@ -272,22 +274,14 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const { id, recriarSnapshot, vinhos, ...dados } = input;
 
-        // Obtém o evento atual para calcular valores
         const eventoAtual = await db.obterEventoPorId(id);
         if (!eventoAtual) throw new Error("Evento não encontrado");
 
-        // Verifica conflito de agenda se data, horário ou local foram alterados
         if (dados.data || dados.horario || dados.local) {
           const dataEvento = dados.data ? new Date(dados.data) : eventoAtual.data;
-          const horarioEvento = dados.horario || eventoAtual.horario;
-          const localEvento = dados.local || eventoAtual.local;
-
-          const conflito = await db.verificarConflitoAgenda(
-            dataEvento,
-            horarioEvento,
-            localEvento,
-            id
-          );
+          const horario = dados.horario || eventoAtual.horario;
+          const local = dados.local || eventoAtual.local;
+          const conflito = await db.verificarConflitoAgenda(dataEvento, horario, local, id);
 
           if (conflito) {
             const cliente = await db.obterClientePorId(conflito.clienteId);
@@ -300,85 +294,58 @@ export const appRouter = router({
           }
         }
 
-        // Prepara os dados atualizados
-        const dadosAtualizados: any = { ...dados };
+        const quantidadePessoas = dados.quantidadePessoas || eventoAtual.quantidadePessoas;
+        const valorPorPessoaEvento = dados.valorPorPessoaEvento || eventoAtual.valorPorPessoaEvento;
+        const pacoteBebidasAtivo = dados.pacoteBebidasAtivo === undefined ? eventoAtual.pacoteBebidasAtivo : dados.pacoteBebidasAtivo;
+        const valorPacoteBebidas = dados.valorPacoteBebidas || eventoAtual.valorPacoteBebidas;
+        const vinhosAtuais = vinhos === undefined ? await db.obterVinhosEvento(id) : vinhos;
+
+        const subtotalMenu = valorPorPessoaEvento * quantidadePessoas;
+        const subtotalBebidas = pacoteBebidasAtivo ? valorPacoteBebidas * quantidadePessoas : 0;
+        const subtotalVinhos = await db.calcularSubtotalVinhos(vinhosAtuais);
+        const subtotalSemTaxa = subtotalMenu + subtotalBebidas + subtotalVinhos;
+        const taxaServico = Math.round(subtotalSemTaxa * 0.10);
+        const totalEvento = subtotalSemTaxa + taxaServico;
+
+        const eventoData: any = {
+          ...dados,
+          subtotalMenu,
+          subtotalBebidas,
+          subtotalVinhos,
+          taxaServico,
+          totalEvento,
+        };
 
         if (dados.data) {
-          dadosAtualizados.data = new Date(dados.data);
+          eventoData.data = new Date(dados.data);
         }
 
-        // Recalcula os valores se necessário
-        const valorPorPessoa = dados.valorPorPessoaEvento ?? eventoAtual.valorPorPessoaEvento;
-        const quantidade = dados.quantidadePessoas ?? eventoAtual.quantidadePessoas;
-        const pacoteAtivo = dados.pacoteBebidasAtivo ?? eventoAtual.pacoteBebidasAtivo;
-        const valorPacote = dados.valorPacoteBebidas ?? eventoAtual.valorPacoteBebidas;
+        const eventoAtualizado = await db.atualizarEvento(id, eventoData);
 
-        dadosAtualizados.subtotalMenu = valorPorPessoa * quantidade;
-        dadosAtualizados.subtotalBebidas = pacoteAtivo ? valorPacote * quantidade : 0;
-        
-        // Calcula subtotal de vinhos se fornecido
-        const subtotalVinhos = vinhos ? await db.calcularSubtotalVinhos(vinhos) : eventoAtual.subtotalVinhos;
-        dadosAtualizados.subtotalVinhos = subtotalVinhos;
-        
-        const subtotalSemTaxa = dadosAtualizados.subtotalMenu + dadosAtualizados.subtotalBebidas + subtotalVinhos;
-        dadosAtualizados.taxaServico = Math.round(subtotalSemTaxa * 0.10); // 10%
-        dadosAtualizados.totalEvento = subtotalSemTaxa + dadosAtualizados.taxaServico;
-
-        // Atualiza o evento
-        const eventoAtualizado = await db.atualizarEvento(id, dadosAtualizados);
-
-        // Atualiza os vinhos se fornecido
         if (vinhos !== undefined) {
-          await db.removerVinhosEvento(id);
+          await db.excluirVinhosEvento(id);
           if (vinhos.length > 0) {
             await db.adicionarVinhosEvento(id, vinhos);
           }
         }
 
-        // Recria o snapshot se o menu foi alterado e recriarSnapshot = true
-        if (recriarSnapshot && dados.menuId) {
+        if (recriarSnapshot && eventoAtualizado.menuId) {
           await db.excluirSnapshotPratos(id);
-          await db.criarSnapshotPratos(id, dados.menuId);
+          await db.criarSnapshotPratos(id, eventoAtualizado.menuId);
         }
 
         return eventoAtualizado;
       }),
 
-    duplicar: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
-        const eventoOriginal = await db.obterEventoPorId(input.id);
-        if (!eventoOriginal) throw new Error("Evento não encontrado");
-
-        const { id, createdAt, updatedAt, ...dadosEvento } = eventoOriginal;
-
-        // Cria o novo evento
-        const novoEvento = await db.criarEvento({
-          ...dadosEvento,
-          status: "em_analise",
-        });
-
-        // Cria o snapshot dos pratos
-        await db.criarSnapshotPratos(novoEvento.id, eventoOriginal.menuId);
-
-        return novoEvento;
-      }),
-
     excluir: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string() }))
       .mutation(async ({ input }) => {
         await db.excluirEvento(input.id);
         return { success: true };
       }),
 
-    obterSnapshot: protectedProcedure
-      .input(z.object({ eventoId: z.number() }))
-      .query(async ({ input }) => {
-        return await db.obterSnapshotPratos(input.eventoId);
-      }),
-
-    gerarPDF: protectedProcedure
-      .input(z.object({ eventoId: z.number() }))
+    gerarProposta: protectedProcedure
+      .input(z.object({ eventoId: z.string() }))
       .mutation(async ({ input }) => {
         const evento = await db.obterEventoPorId(input.eventoId);
         if (!evento) throw new Error("Evento não encontrado");
@@ -390,143 +357,36 @@ export const appRouter = router({
         if (!menu) throw new Error("Menu não encontrado");
 
         const pratosSnapshot = await db.obterSnapshotPratos(evento.id);
+        const vinhos = await db.obterVinhosEvento(evento.id);
 
-        const pdfBuffer = await gerarPropostaPDF({
-          evento,
-          cliente,
-          menu,
-          pratosSnapshot,
-        });
-
-        // Retorna o PDF como base64 para o cliente
-        return {
-          pdf: pdfBuffer.toString('base64'),
-          filename: `proposta-evento-${evento.id}.pdf`,
-        };
+        const buffer = await gerarPropostaPDF({ evento, cliente, menu, pratosSnapshot, vinhos });
+        return { pdf: buffer.toString("base64") };
       }),
 
     enviarProposta: protectedProcedure
-      .input(
-        z.object({
-          eventoId: z.number(),
-          mensagemPersonalizada: z.string().optional(),
-        })
-      )
+      .input(z.object({ eventoId: z.string(), mensagem: z.string().optional() }))
       .mutation(async ({ input }) => {
         const evento = await db.obterEventoPorId(input.eventoId);
         if (!evento) throw new Error("Evento não encontrado");
 
         const cliente = await db.obterClientePorId(evento.clienteId);
-        if (!cliente) throw new Error("Cliente não encontrado");
+        if (!cliente || !cliente.email) throw new Error("Cliente ou e-mail do cliente não encontrado");
 
-        if (!cliente.email) {
-          throw new Error("Cliente não possui e-mail cadastrado");
-        }
-
-        const menu = await db.obterMenuPorId(evento.menuId);
-        if (!menu) throw new Error("Menu não encontrado");
-
-        const pratosSnapshot = await db.obterSnapshotPratos(evento.id);
-
-        try {
-          await enviarPropostaEmail({
-            evento,
-            cliente,
-            menu,
-            pratosSnapshot,
-            mensagemPersonalizada: input.mensagemPersonalizada,
-          });
-
-          // Registra no histórico
-          await db.registrarEnvioEmail({
-            eventoId: evento.id,
-            tipo: "proposta",
-            destinatario: cliente.email,
-            assunto: `Proposta de Evento - ${evento.data.toLocaleDateString('pt-BR')}`,
-            conteudo: input.mensagemPersonalizada || "Proposta enviada",
-            sucesso: true,
-          });
-
-          return { success: true };
-        } catch (error: any) {
-          // Registra erro no histórico
-          await db.registrarEnvioEmail({
-            eventoId: evento.id,
-            tipo: "proposta",
-            destinatario: cliente.email,
-            assunto: `Proposta de Evento - ${evento.data.toLocaleDateString('pt-BR')}`,
-            conteudo: input.mensagemPersonalizada || "Proposta enviada",
-            sucesso: false,
-            mensagemErro: error.message,
-          });
-
-          throw new Error(`Erro ao enviar e-mail: ${error.message}`);
-        }
+        await enviarPropostaEmail(evento, cliente, input.mensagem);
+        return { success: true };
       }),
 
     enviarAtualizacao: protectedProcedure
-      .input(
-        z.object({
-          eventoId: z.number(),
-          mensagemPersonalizada: z.string().optional(),
-        })
-      )
+      .input(z.object({ eventoId: z.string(), mensagem: z.string().optional() }))
       .mutation(async ({ input }) => {
         const evento = await db.obterEventoPorId(input.eventoId);
         if (!evento) throw new Error("Evento não encontrado");
 
         const cliente = await db.obterClientePorId(evento.clienteId);
-        if (!cliente) throw new Error("Cliente não encontrado");
+        if (!cliente || !cliente.email) throw new Error("Cliente ou e-mail do cliente não encontrado");
 
-        if (!cliente.email) {
-          throw new Error("Cliente não possui e-mail cadastrado");
-        }
-
-        const menu = await db.obterMenuPorId(evento.menuId);
-        if (!menu) throw new Error("Menu não encontrado");
-
-        const pratosSnapshot = await db.obterSnapshotPratos(evento.id);
-
-        try {
-          await enviarAtualizacaoEmail({
-            evento,
-            cliente,
-            menu,
-            pratosSnapshot,
-            mensagemPersonalizada: input.mensagemPersonalizada,
-          });
-
-          // Registra no histórico
-          await db.registrarEnvioEmail({
-            eventoId: evento.id,
-            tipo: "atualizacao",
-            destinatario: cliente.email,
-            assunto: `Atualização de Reserva - ${evento.data.toLocaleDateString('pt-BR')}`,
-            conteudo: input.mensagemPersonalizada || "Atualização enviada",
-            sucesso: true,
-          });
-
-          return { success: true };
-        } catch (error: any) {
-          // Registra erro no histórico
-          await db.registrarEnvioEmail({
-            eventoId: evento.id,
-            tipo: "atualizacao",
-            destinatario: cliente.email,
-            assunto: `Atualização de Reserva - ${evento.data.toLocaleDateString('pt-BR')}`,
-            conteudo: input.mensagemPersonalizada || "Atualização enviada",
-            sucesso: false,
-            mensagemErro: error.message,
-          });
-
-          throw new Error(`Erro ao enviar e-mail: ${error.message}`);
-        }
-      }),
-
-    obterHistoricoEmails: protectedProcedure
-      .input(z.object({ eventoId: z.number() }))
-      .query(async ({ input }) => {
-        return await db.obterHistoricoEmailsPorEvento(input.eventoId);
+        await enviarAtualizacaoEmail(evento, cliente, input.mensagem);
+        return { success: true };
       }),
   }),
 
@@ -537,135 +397,37 @@ export const appRouter = router({
         return await db.obterConfiguracao(input.chave);
       }),
 
-    obterTodas: protectedProcedure.query(async () => {
-      const configs = await db.listarConfiguracoes();
-      const result: Record<string, string> = {};
-      configs.forEach((c) => {
-        result[c.chave] = c.valor;
-      });
-      return result;
-    }),
-
-    salvar: protectedProcedure
-      .input(
-        z.object({
-          chave: z.string(),
-          valor: z.string(),
-          descricao: z.string().optional(),
-        })
-      )
+    atualizar: protectedProcedure
+      .input(z.object({ chave: z.string(), valor: z.string(), descricao: z.string().optional() }))
       .mutation(async ({ input }) => {
-        await db.salvarConfiguracao(input.chave, input.valor, input.descricao);
+        const { chave, ...dados } = input;
+        return await db.upsertConfiguracao(chave, dados);
+      }),
+  }),
+
+  servicos: router({
+    enviarAgendaDiaria: protectedProcedure
+      .mutation(async () => {
+        await enviarAgendaDiaria();
         return { success: true };
       }),
 
-    salvarVarias: protectedProcedure
-      .input(
-        z.record(z.string(), z.string())
-      )
-      .mutation(async ({ input }) => {
-        for (const [chave, valor] of Object.entries(input)) {
-          if (typeof valor === 'string') {
-            await db.salvarConfiguracao(chave, valor);
+    enviarLembretes: protectedProcedure
+      .mutation(async () => {
+        const hoje = new Date();
+        const dataLembrete = new Date(hoje.setDate(hoje.getDate() + 7)); // D-7
+        const eventos = await db.obterEventosParaLembrete(dataLembrete);
+
+        for (const evento of eventos) {
+          const cliente = await db.obterClientePorId(evento.clienteId);
+          if (cliente && cliente.email) {
+            await enviarLembreteEmail(evento, cliente);
           }
         }
-        return { success: true };
-      }),
-  }),
 
-  agendaDiaria: router({
-    enviar: protectedProcedure
-      .input(
-        z.object({
-          data: z.string(),
-          destinatarios: z.array(z.string().email()),
-        })
-      )
-      .mutation(async ({ input }) => {
-        const dataAlvo = new Date(input.data);
-        
-        // Busca eventos do dia
-        const dataInicio = new Date(dataAlvo);
-        dataInicio.setHours(0, 0, 0, 0);
-        
-        const dataFim = new Date(dataAlvo);
-        dataFim.setHours(23, 59, 59, 999);
-
-        const eventos = await db.listarEventos({
-          dataInicio,
-          dataFim,
-        });
-
-        // Busca dados dos clientes
-        const eventosComCliente = await Promise.all(
-          eventos.map(async (evento) => {
-            const cliente = await db.obterClientePorId(evento.clienteId);
-            return {
-              ...evento,
-              cliente: cliente!,
-            };
-          })
-        );
-
-        // Ordena por horário
-        eventosComCliente.sort((a, b) => a.horario.localeCompare(b.horario));
-
-        await enviarAgendaDiaria(eventosComCliente, dataAlvo, input.destinatarios);
-
-        return { success: true, totalEventos: eventos.length };
-      }),
-  }),
-
-  pratos: router({
-    listarPorMenu: protectedProcedure
-      .input(z.object({ menuId: z.number() }))
-      .query(async ({ input }) => {
-        return await db.listarPratosPorMenu(input.menuId);
-      }),
-
-    obter: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
-        return await db.obterPratoPorId(input.id);
-      }),
-
-    criar: protectedProcedure
-      .input(
-        z.object({
-          menuId: z.number(),
-          nome: z.string().min(1, "Nome é obrigatório"),
-          descricao: z.string().optional().nullable(),
-          etapa: z.enum(["couvert", "entrada", "principal", "sobremesa"]),
-          ordem: z.number().default(0),
-        })
-      )
-      .mutation(async ({ input }) => {
-        return await db.criarPrato(input);
-      }),
-
-    atualizar: protectedProcedure
-      .input(
-        z.object({
-          id: z.number(),
-          nome: z.string().min(1, "Nome é obrigatório").optional(),
-          descricao: z.string().optional().nullable(),
-          etapa: z.enum(["couvert", "entrada", "principal", "sobremesa"]).optional(),
-          ordem: z.number().optional(),
-        })
-      )
-      .mutation(async ({ input }) => {
-        const { id, ...dados } = input;
-        return await db.atualizarPrato(id, dados);
-      }),
-
-    excluir: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
-        await db.excluirPrato(input.id);
-        return { success: true };
+        return { success: true, count: eventos.length };
       }),
   }),
 });
 
 export type AppRouter = typeof appRouter;
-
